@@ -12,6 +12,8 @@ var attack_range := 230.0
 var attack_timer := 0.0
 var target: Entity = null
 var aim := Vector2.UP
+var sprite := ""
+var fire_anim := 0.0
 
 
 func setup(p_game, p_team: int, p_kind: String, p_pos: Vector2, p_lane: int) -> void:
@@ -46,6 +48,7 @@ func _on_damaged() -> void:
 
 func _process(delta: float) -> void:
 	hit_flash = maxf(0.0, hit_flash - delta)
+	fire_anim = maxf(0.0, fire_anim - delta)
 	queue_redraw()
 	if not game.is_running() or not active:
 		return
@@ -57,6 +60,7 @@ func _process(delta: float) -> void:
 	aim = (target.position - position).normalized()
 	if attack_timer <= 0.0:
 		attack_timer = hit_speed
+		fire_anim = 0.2
 		game.spawn_projectile(self, target, damage, 0.0, "any")
 
 
@@ -79,33 +83,27 @@ func _find_target() -> Entity:
 
 func _draw() -> void:
 	var col := Arena.team_color(team)
-	var body := Art.RUST
-	if hit_flash > 0.0:
-		body = body.lightened(0.4)
 	var r := radius
-	# Footprint and shadow.
-	draw_rect(Rect2(-r * 1.1, -r * 0.2, r * 2.2, r * 1.2), Color(0, 0, 0, 0.3))
-	draw_rect(Rect2(-r, -r * 1.2, r * 2.0, r * 2.0), body)
-	draw_rect(Rect2(-r, -r * 1.2, r * 2.0, r * 2.0), Art.RUST_DARK, false, 3.0)
-	# Welded scrap plates.
-	draw_rect(Rect2(-r * 0.85, -r * 0.3, r * 0.7, r * 0.8), Art.METAL_DARK)
-	draw_rect(Rect2(r * 0.2, -r * 0.55, r * 0.65, r * 0.6), Art.RUST_DARK)
-	for i in 4:
-		var x := -r * 0.75 + i * r * 0.5
-		draw_circle(Vector2(x, -r * 1.0), 2.5, Art.DARK)
-		draw_circle(Vector2(x, r * 0.6), 2.5, Art.DARK)
-	# Team colour band.
-	draw_rect(Rect2(-r, -r * 1.2, r * 2.0, r * 0.3), col)
-	# Turret and barrel.
-	var turret := Vector2(0, -r * 0.5)
-	draw_line(turret, turret + aim * r * 0.95, Art.DARK, r * 0.28)
-	draw_circle(turret, r * 0.45, Art.METAL)
-	draw_circle(turret, r * 0.25, col.darkened(0.2))
+	var base := Vector2(0, r * 0.75)
+	Art.draw_shadow(self, base, r * 1.35, 0.55)
+	draw_set_transform(base, 0.0, Vector2(1.0, 0.42))
+	draw_arc(Vector2.ZERO, r * 1.2, 0.0, TAU, 32, col, 4.0)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var size := r * (2.95 if kind == "king" else 3.4)
+	var mod := Art.FLASH if hit_flash > 0.0 else Color.WHITE
+	if kind == "king" and not active:
+		mod = mod * Color(0.8, 0.8, 0.85)
+	var squash := 0.05 * sin(fire_anim / 0.2 * PI)
+	Art.draw_sprite(self, sprite, base, size, false, mod, squash)
+	var top := base.y - size
 	if kind == "king":
-		Art.draw_crown(self, Vector2(0, -r * 1.55), r * 0.45, Color(1.0, 0.82, 0.25))
+		Art.draw_crown(self, Vector2(0, top - 4.0), r * 0.36, Color(1.0, 0.82, 0.25))
 		if not active:
 			var font := ThemeDB.fallback_font
-			draw_string(font, Vector2(r * 0.55, -r * 1.35), "z z", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 1, 1, 0.8))
-	draw_hp_bar(r * 2.2, r * 0.95, true)
+			draw_string_outline(font, Vector2(r * 0.5, top + 10.0), "z z", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 4, Color(0, 0, 0, 0.7))
+			draw_string(font, Vector2(r * 0.5, top + 10.0), "z z", HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color(1, 1, 1, 0.9))
+	draw_hp_bar(r * 2.2, base.y + 10.0, true)
 	var font2 := ThemeDB.fallback_font
-	draw_string(font2, Vector2(-r * 1.1, r * 0.95 + 22.0), str(int(ceil(hp))), HORIZONTAL_ALIGNMENT_CENTER, r * 2.2, 16, Color.WHITE)
+	var label_pos := Vector2(-r * 1.1, base.y + 34.0)
+	draw_string_outline(font2, label_pos, str(int(ceil(hp))), HORIZONTAL_ALIGNMENT_CENTER, r * 2.2, 16, 4, Color(0, 0, 0, 0.8))
+	draw_string(font2, label_pos, str(int(ceil(hp))), HORIZONTAL_ALIGNMENT_CENTER, r * 2.2, 16, Color.WHITE)

@@ -3,3 +3,5 @@
 /android/
 /build/
 *.tmp
+/tools/concept_sheets/
+__pycache__/

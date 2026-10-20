@@ -5,7 +5,8 @@ extends Entity
 
 const DEPLOY_TIME := 1.0
 const MELEE_MAX_RANGE := 45.0
-const AIR_HEIGHT := 16.0
+const AIR_HEIGHT := 22.0
+const ATTACK_ANIM_TIME := 0.28
 
 var id := ""
 var card: Dictionary = {}
@@ -24,6 +25,11 @@ var target: Entity = null
 var locked := false
 var anim_t := 0.0
 var facing := Vector2.UP
+var flip := false
+var attack_anim := 0.0
+var moving := false
+var kamikaze := false
+var size := 56.0
 
 
 func setup(p_game, p_team: int, p_id: String, p_pos: Vector2) -> void:
@@ -45,22 +51,23 @@ func setup(p_game, p_team: int, p_id: String, p_pos: Vector2) -> void:
 	is_air = card["air"]
 	is_building = card["type"] == "building"
 	lifetime = card["lifetime"]
+	kamikaze = card["kamikaze"]
+	size = card["size"]
 	facing = Vector2.UP if team == Arena.PLAYER else Vector2.DOWN
 	anim_t = randf() * 10.0
 	z_index = 3 if is_air else 0
-	modulate.a = 0.55
 
 
 func _process(delta: float) -> void:
 	hit_flash = maxf(0.0, hit_flash - delta)
+	attack_anim = maxf(0.0, attack_anim - delta)
 	queue_redraw()
 	if not game.is_running():
 		return
 	anim_t += delta
+	moving = false
 	if deploy_timer > 0.0:
 		deploy_timer -= delta
-		if deploy_timer <= 0.0:
-			modulate.a = 1.0
 		return
 	if lifetime > 0.0:
 		hp -= max_hp / lifetime * delta
@@ -114,6 +121,12 @@ func _find_target() -> Entity:
 
 
 func _attack() -> void:
+	attack_anim = ATTACK_ANIM_TIME
+	if kamikaze:
+		game.deal_area(team, position, splash, damage, 1.0, "any")
+		game.spawn_effect("boom", position, splash * 1.4, game.faction_color(team))
+		die()
+		return
 	if attack_range > MELEE_MAX_RANGE:
 		game.spawn_projectile(self, target, damage, splash, targets)
 	else:
@@ -128,6 +141,7 @@ func _move_toward_target(delta: float) -> void:
 	if to.length() > 1.0:
 		var dir := to.normalized()
 		facing = dir
+		moving = true
 		position += dir * minf(speed * delta, to.length())
 
 
@@ -152,20 +166,44 @@ func _path_point(goal: Vector2) -> Vector2:
 
 func _draw() -> void:
 	var col := Arena.team_color(team)
-	if hit_flash > 0.0:
-		col = col.lightened(0.6)
+	if absf(facing.x) > 0.25:
+		flip = facing.x < 0.0
 	var lift := 0.0
 	if is_air:
-		lift = -AIR_HEIGHT + sin(anim_t * 4.0) * 2.0
+		lift = -AIR_HEIGHT + sin(anim_t * 3.0) * 3.0
+	var feet := Vector2(0, radius * 0.6)
 	# Shadow and team ring at the feet.
-	draw_set_transform(Vector2(0, radius * 0.7), 0.0, Vector2(1.0, 0.45))
-	draw_circle(Vector2.ZERO, radius * 1.1, Color(0, 0, 0, 0.3))
+	Art.draw_shadow(self, feet, radius * (1.5 if is_air else 1.3), 0.3 if is_air else 0.45)
 	if not is_air:
-		draw_arc(Vector2.ZERO, radius * 1.15, 0.0, TAU, 24, col, 3.0)
-	draw_set_transform(Vector2(0, lift), 0.0, Vector2.ONE)
-	Art.draw_unit(self, id, radius, col, anim_t, facing)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	if deploy_timer > 0.0:
-		var k := 1.0 - deploy_timer / DEPLOY_TIME
-		draw_arc(Vector2(0, lift), radius + 6.0, -PI * 0.5, -PI * 0.5 + TAU * k, 24, Color.WHITE, 2.0)
-	draw_hp_bar(maxf(24.0, radius * 2.2), lift - radius * 1.25 - 10.0)
+		draw_set_transform(feet, 0.0, Vector2(1.0, 0.42))
+		draw_arc(Vector2.ZERO, radius * 1.25, 0.0, TAU, 28, Color(col, 0.9), 3.0)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# Walk bob, idle breathing and an attack squash with a lunge.
+	var bob := 0.0
+	var tilt := 0.0
+	var squash := sin(anim_t * 2.4) * 0.015
+	if moving and not is_building:
+		bob = -absf(sin(anim_t * 7.0)) * size * 0.05
+		tilt = sin(anim_t * 7.0) * 0.05
+	var lunge := Vector2.ZERO
+	if attack_anim > 0.0:
+		var k := sin((1.0 - attack_anim / ATTACK_ANIM_TIME) * PI)
+		squash += 0.14 * k
+		if attack_range <= MELEE_MAX_RANGE and not is_building:
+			lunge = facing * 7.0 * k
+	var mod := Color.WHITE
+	if hit_flash > 0.0:
+		mod = Art.FLASH
+	var deploying := deploy_timer > 0.0
+	var drop := 0.0
+	if deploying:
+		var dk := 1.0 - deploy_timer / DEPLOY_TIME
+		drop = -(1.0 - minf(1.0, dk * 3.0)) * 40.0
+		mod = Color(1, 1, 1, 0.55 + 0.45 * dk)
+	Art.draw_sprite(self, id, feet + Vector2(0, lift + bob + drop) + lunge, size, flip, mod, squash, tilt)
+	if deploying:
+		var k2 := 1.0 - deploy_timer / DEPLOY_TIME
+		draw_arc(Vector2(0, lift), radius + 8.0, -PI * 0.5, -PI * 0.5 + TAU * k2, 24, Color.WHITE, 2.0)
+	var ts := Art.tex(id).get_size()
+	var height := size * ts.y / maxf(ts.x, ts.y)
+	draw_hp_bar(maxf(28.0, radius * 2.2), feet.y + lift - height - 8.0)

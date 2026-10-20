@@ -13,6 +13,8 @@ const NEXT_RECT := Rect2(12, 1070, 86, 112)
 const ELIXIR_RECT := Rect2(112, 1226, 598, 34)
 const ELIXIR_COLOR := Color(0.86, 0.3, 0.95)
 const PANEL := Color(0.13, 0.12, 0.13)
+const FACTION_PANEL_Y := [372.0, 622.0, 872.0]
+const FACTION_PANEL_SIZE := Vector2(660, 230)
 
 var game
 var font: Font
@@ -55,9 +57,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		_on_release(p)
 
 
+func faction_panel(i: int) -> Rect2:
+	return Rect2(Vector2((Arena.W - FACTION_PANEL_SIZE.x) * 0.5, FACTION_PANEL_Y[i]), FACTION_PANEL_SIZE)
+
+
 func _on_press(p: Vector2) -> void:
 	if game.is_ready_screen():
-		game.start_match()
+		for i in Cards.FACTION_IDS.size():
+			if faction_panel(i).has_point(p):
+				game.set_player_faction(Cards.FACTION_IDS[i])
+				game.start_match()
 		return
 	if game.is_over():
 		if Time.get_ticks_msec() / 1000.0 - game.over_time > 1.0:
@@ -119,11 +128,13 @@ func _draw() -> void:
 
 
 func _draw_top_bar() -> void:
-	draw_rect(Rect2(0, 0, Arena.W, Arena.TOP), PANEL)
+	draw_rect(Rect2(0, 0, Arena.W, Arena.TOP), Color(PANEL, 0.82))
 	var enemy_col := Arena.team_color(Arena.ENEMY)
 	var player_col := Arena.team_color(Arena.PLAYER)
-	draw_string(font, Vector2(14, 25), "SCRAP AI", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, enemy_col)
-	draw_string(font, Vector2(Arena.W - 214, 25), "YOU", HORIZONTAL_ALIGNMENT_RIGHT, 200, 18, player_col)
+	var enemy_name: String = game.faction_data(Arena.ENEMY)["name"]
+	var player_name: String = game.faction_data(Arena.PLAYER)["name"]
+	draw_string(font, Vector2(14, 25), "AI · " + enemy_name.to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, enemy_col)
+	draw_string(font, Vector2(Arena.W - 314, 25), "YOU · " + player_name.to_upper(), HORIZONTAL_ALIGNMENT_RIGHT, 300, 18, player_col)
 	for i in 3:
 		var got_enemy: bool = i < game.crowns[Arena.ENEMY]
 		var got_player: bool = i < game.crowns[Arena.PLAYER]
@@ -167,24 +178,34 @@ func _draw_bottom_panel() -> void:
 
 func _draw_card(r: Rect2, id: String, affordable: bool, highlight: bool, scale_k: float) -> void:
 	var card := Cards.get_card(id)
-	draw_rect(r, Color(0.28, 0.24, 0.2))
-	draw_rect(r.grow(-4), Color(0.4, 0.34, 0.27))
-	var icon_center := r.position + Vector2(r.size.x * 0.5, r.size.y * 0.47)
-	var icon_size := 34.0 * scale_k
-	if card["type"] == "troop" and card["count"] > 1:
-		icon_size *= 0.8
-	draw_set_transform(icon_center, 0.0, Vector2.ONE)
-	Art.draw_unit(self, id, icon_size, Arena.team_color(Arena.PLAYER), Time.get_ticks_msec() / 1000.0, Vector2.UP)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var fcol: Color = Cards.faction(Cards.faction_of_card(id))["color"]
+	draw_rect(r, fcol.darkened(0.55))
+	var inner := r.grow(-4)
+	draw_rect(inner, Color(0.16, 0.14, 0.13))
+	# Soft faction glow behind the portrait.
+	var glow_c := inner.get_center() + Vector2(0, -6 * scale_k)
+	for i in 4:
+		draw_circle(glow_c, inner.size.x * (0.48 - i * 0.1), Color(fcol, 0.08))
+	var portrait := inner.size.x * 0.98
+	var feet := Vector2(inner.get_center().x, inner.end.y - (32.0 if scale_k >= 1.0 else 6.0))
+	var ts := Art.tex(id).get_size()
+	if ts.x > ts.y:
+		# Wide art (dragons, drones, spells): centre it instead of standing it up.
+		Art.draw_sprite_centered(self, id, glow_c, portrait)
+	else:
+		Art.draw_sprite(self, id, feet, minf(portrait, inner.size.y - (36.0 if scale_k >= 1.0 else 8.0)))
 	if scale_k >= 1.0:
-		draw_rect(Rect2(r.position.x + 4, r.end.y - 34, r.size.x - 8, 30), Color(0, 0, 0, 0.45))
-		_text(card["name"], r.get_center().x, r.end.y - 13, 16, Color.WHITE)
+		draw_rect(Rect2(inner.position.x, inner.end.y - 30, inner.size.x, 30), Color(0, 0, 0, 0.7))
+		var label: String = card["name"]
+		var fs := 15 if label.length() <= 14 else 12
+		_text(label, r.get_center().x, r.end.y - 14, fs, Color.WHITE)
 	# Elixir cost bubble.
 	var bubble := r.position + Vector2(18, 18) * scale_k + Vector2(2, 2)
-	draw_circle(bubble, 15.0 * scale_k, ELIXIR_COLOR.darkened(0.15))
+	draw_circle(bubble, 16.0 * scale_k, Color(0, 0, 0, 0.6))
+	draw_circle(bubble, 14.0 * scale_k, ELIXIR_COLOR.darkened(0.15))
 	_text(str(card["cost"]), bubble.x, bubble.y + 8 * scale_k, int(22 * scale_k), Color.WHITE, true)
 	if not affordable:
-		draw_rect(r, Color(0, 0, 0, 0.5))
+		draw_rect(r, Color(0, 0, 0, 0.55))
 	if highlight:
 		draw_rect(r, Color(1.0, 0.85, 0.3), false, 4.0)
 	else:
@@ -206,31 +227,42 @@ func _draw_preview() -> void:
 	var valid: bool = game.is_valid_drop(Arena.PLAYER, id, p)
 	var col := Color(1, 1, 1, 0.55) if valid else Color(1, 0.3, 0.3, 0.55)
 	if card["type"] == "spell":
-		draw_circle(p, card["spell_radius"], Color(1.0, 0.5, 0.1, 0.15))
+		draw_circle(p, card["spell_radius"], Color(game.faction_color(Arena.PLAYER), 0.15))
 		draw_arc(p, card["spell_radius"], 0.0, TAU, 40, col, 2.0)
 		return
 	if card["range"] > 45.0:
 		draw_arc(p, card["range"] + card["radius"], 0.0, TAU, 48, Color(1, 1, 1, 0.2), 1.5)
-	draw_set_transform(p, 0.0, Vector2.ONE)
-	Art.draw_unit(self, id, card["radius"], Color(Arena.team_color(Arena.PLAYER), 0.6), 0.0, Vector2.UP)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	Art.draw_sprite(self, id, p + Vector2(0, card["radius"] * 0.6), card["size"], false, Color(1, 1, 1, 0.6))
 	draw_arc(p, card["radius"] + 8.0, 0.0, TAU, 24, col, 2.0)
 
 
 func _draw_start_screen() -> void:
-	draw_rect(Rect2(0, 0, Arena.W, Arena.H), Color(0, 0, 0, 0.72))
-	_text("SCRAPWARS", Arena.MID_X, 400, 76, Color(1.0, 0.75, 0.3), true)
-	_text("Junkyard robot battles", Arena.MID_X, 450, 26, Color(1, 1, 1, 0.8))
-	var lines := [
-		"Tap a card, then tap your side of the arena.",
-		"Cards cost elixir, which refills over time.",
-		"Destroy towers to earn crowns.",
-		"Take the King Tower for an instant win!",
-	]
-	for i in lines.size():
-		_text(lines[i], Arena.MID_X, 560 + i * 40, 22, Color.WHITE)
+	draw_rect(Rect2(0, 0, Arena.W, Arena.H), Color(0.05, 0.04, 0.05, 0.86))
+	_text("SCRAPFALL", Arena.MID_X, 230, 88, Color(1.0, 0.45, 0.2), true)
+	_text("1v1 wasteland card battles", Arena.MID_X, 278, 26, Color(1, 1, 1, 0.85))
+	_text("Choose your faction", Arena.MID_X, 345, 28, Color(1.0, 0.85, 0.5))
+	var now := Time.get_ticks_msec() / 1000.0
+	for i in Cards.FACTION_IDS.size():
+		var f := Cards.faction(Cards.FACTION_IDS[i])
+		var r := faction_panel(i)
+		var col: Color = f["color"]
+		draw_rect(r, col.darkened(0.7))
+		draw_rect(r, Color(col, 0.9), false, 3.0)
+		var hero_feet := Vector2(r.position.x + 110, r.end.y - 12)
+		draw_circle(hero_feet + Vector2(0, -95), 90, Color(col, 0.12))
+		Art.draw_sprite(self, f["hero"], hero_feet + Vector2(0, -absf(sin(now * 2.0 + i)) * 4.0), 200)
+		var tx := r.position.x + 230
+		draw_string_outline(font, Vector2(tx, r.position.y + 52), f["name"].to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 40, 6, Color(0, 0, 0, 0.8))
+		draw_string(font, Vector2(tx, r.position.y + 52), f["name"].to_upper(), HORIZONTAL_ALIGNMENT_LEFT, -1, 40, col.lightened(0.25))
+		draw_string(font, Vector2(tx, r.position.y + 84), f["tagline"], HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color(1, 1, 1, 0.8))
+		var deck: Array = f["deck"]
+		for k in deck.size():
+			var cell := Rect2(tx + (k % 4) * 104, r.position.y + 100 + (k / 4) * 62, 98, 58)
+			draw_rect(cell, Color(0, 0, 0, 0.35))
+			Art.draw_sprite_centered(self, deck[k], cell.get_center(), 54)
 	var pulse := 0.6 + 0.4 * sin(Time.get_ticks_msec() / 250.0)
-	_text("TAP TO START", Arena.MID_X, 820, 40, Color(1, 1, 1, pulse), true)
+	_text("TAP A FACTION TO START", Arena.MID_X, 1150, 30, Color(1, 1, 1, pulse), true)
+	_text("Deploy cards, smash towers, take the King for an instant win.", Arena.MID_X, 1195, 18, Color(1, 1, 1, 0.65))
 
 
 func _draw_end_screen() -> void:
@@ -245,5 +277,5 @@ func _draw_end_screen() -> void:
 		col = Arena.team_color(Arena.ENEMY)
 	_text(title, Arena.MID_X, 520, 84, col, true)
 	_text("%d  -  %d" % [game.crowns[Arena.PLAYER], game.crowns[Arena.ENEMY]], Arena.MID_X, 600, 44, Color.WHITE, true)
-	_text("You          Scrap AI", Arena.MID_X, 640, 20, Color(1, 1, 1, 0.7))
+	_text("You          AI", Arena.MID_X, 640, 20, Color(1, 1, 1, 0.7))
 	_text("Tap to play again", Arena.MID_X, 760, 32, Color(1, 1, 1, 0.9), true)

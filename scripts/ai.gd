@@ -1,15 +1,43 @@
 extends Node
 ## A simple rule-based opponent. Every second or so it looks at the board:
-## it defends against troops on its side, throws a Fire Bomb at clumps,
+## it defends against troops on its side, throws its spell at clumps,
 ## and otherwise saves elixir to push a lane with a tank plus support.
-
-const TANKS := ["giant", "ram"]
-const SUPPORT := ["archers", "drones", "scrapper", "gremlins"]
+## It works with any faction by sorting its deck into roles.
 
 var game
 var team := Arena.ENEMY
 var think_timer := 2.0
 var attack_threshold := 8.0
+var tanks: Array = []      # Troops that only hit buildings.
+var support: Array = []    # Every other troop.
+var anti_air: Array = []   # Troops that can hit flying units.
+var buildings: Array = []
+var spell := ""
+var deck_faction := ""
+
+
+## Sorts the faction's deck into roles (rebuilt if the faction changes).
+func _learn_deck() -> void:
+	deck_faction = game.factions[team]
+	tanks.clear()
+	support.clear()
+	anti_air.clear()
+	buildings.clear()
+	spell = ""
+	for id in game.faction_data(team)["deck"]:
+		var c := Cards.get_card(id)
+		match c["type"]:
+			"spell":
+				spell = id
+			"building":
+				buildings.append(id)
+			_:
+				if c["targets"] == "buildings":
+					tanks.append(id)
+				else:
+					support.append(id)
+				if c["targets"] == "any":
+					anti_air.append(id)
 
 
 func _process(delta: float) -> void:
@@ -19,6 +47,8 @@ func _process(delta: float) -> void:
 	if think_timer > 0.0:
 		return
 	think_timer = randf_range(0.5, 1.1)
+	if deck_faction != game.factions[team]:
+		_learn_deck()
 	_think()
 
 
@@ -26,7 +56,7 @@ func _think() -> void:
 	var threats := _threats()
 	if not threats.is_empty() and _defend(threats):
 		return
-	if _try_fire_bomb():
+	if _try_spell():
 		return
 	if _support_push():
 		return
@@ -110,31 +140,31 @@ func _defend(threats: Array) -> bool:
 		return true  # Already handled; keep saving elixir.
 	var prefs: Array
 	if main.is_air:
-		prefs = ["archers", "drones"]
+		prefs = anti_air + buildings.filter(func(b): return Cards.get_card(b)["targets"] == "any")
 	elif main.targets == "buildings":
-		prefs = ["cannon", "gremlins", "scrapper", "drones", "archers"]
-	elif threats.size() >= 3:
-		prefs = ["archers", "scrapper", "drones", "cannon"]
+		prefs = buildings + support
 	else:
-		prefs = ["scrapper", "gremlins", "archers", "drones", "cannon"]
+		prefs = support + buildings
 	var king: Entity = game.kings[team]
 	for id in prefs:
 		var pos: Vector2
-		if id == "cannon":
+		if buildings.has(id):
 			pos = _p(Vector2(Arena.MID_X + randf_range(-30, 30), 760.0))
 		else:
 			var toward_king := (king.position - main.position).normalized()
-			var gap := 140.0 if id == "archers" else 70.0
+			var gap := 140.0 if Cards.get_card(id)["range"] > 45.0 else 70.0
 			pos = _clamp_own(main.position + toward_king * gap)
 		if _try_play(id, pos):
 			return true
 	return false
 
 
-func _try_fire_bomb() -> bool:
-	if _slot_of("firebomb") < 0:
+func _try_spell() -> bool:
+	if spell == "" or _slot_of(spell) < 0:
 		return false
-	var radius: float = Cards.get_card("firebomb")["spell_radius"]
+	var c := Cards.get_card(spell)
+	var radius: float = c["spell_radius"]
+	var dmg: float = c["damage"]
 	var best_pos := Vector2.ZERO
 	var best_score := 0.0
 	for e in game.entities:
@@ -145,17 +175,17 @@ func _try_fire_bomb() -> bool:
 		for o in game.entities:
 			if o is Unit and o.alive and o.team != team and o.position.distance_to(e.position) < radius * 0.8:
 				count += 1
-				hp += minf(o.hp, 520.0)
+				hp += minf(o.hp, dmg)
 		var score := hp if count >= 3 else 0.0
 		if score > best_score:
 			best_score = score
 			best_pos = e.position + (e as Unit).facing * 25.0
 	if best_score >= 600.0:
-		return _try_play("firebomb", best_pos)
+		return _try_play(spell, best_pos)
 	# Finish off a weak tower.
 	for t in game.towers[1 - team]:
-		if is_instance_valid(t) and t.alive and t.hp <= 520.0 * 0.35:
-			return _try_play("firebomb", t.position)
+		if is_instance_valid(t) and t.alive and t.hp <= dmg * c["tower_mult"]:
+			return _try_play(spell, t.position)
 	return false
 
 
@@ -164,11 +194,11 @@ func _support_push() -> bool:
 	if _elixir() < 3.0:
 		return false
 	for e in game.entities:
-		if e is Unit and e.alive and e.team == team and TANKS.has(e.id) and _on_my_side(e.position):
+		if e is Unit and e.alive and e.team == team and tanks.has(e.id) and _on_my_side(e.position):
 			if _my_hp_near(e.position, 120.0) > e.hp + 200.0:
 				continue  # Already has company.
 			var behind := _clamp_own(e.position + _p(Vector2(0, 60)) - _p(Vector2.ZERO))
-			for id in SUPPORT:
+			for id in support:
 				if _try_play(id, behind):
 					return true
 	return false
@@ -179,18 +209,20 @@ func _attack() -> void:
 		return
 	var lane := _weak_lane()
 	var lx: float = Arena.LANE_X[lane]
-	for id in TANKS:
-		var y := 990.0 if id == "giant" else 600.0
+	for id in tanks:
+		var y := 990.0 if Cards.get_card(id)["speed"] < 60.0 else 600.0
 		if _try_play(id, _p(Vector2(lx, y))):
 			attack_threshold = randf_range(6.5, 10.0)
 			return
-	for id in SUPPORT:
+	for id in support:
 		if _try_play(id, _p(Vector2(lx + randf_range(-20, 20), 610.0))):
 			attack_threshold = randf_range(6.5, 10.0)
 			return
-	# Nothing useful to push with: drop a cannon so the hand cycles.
+	# Nothing useful to push with: drop a building so the hand cycles.
 	if _elixir() >= 9.5:
-		_try_play("cannon", _p(Vector2(Arena.MID_X, 760.0)))
+		for id in buildings:
+			if _try_play(id, _p(Vector2(Arena.MID_X, 760.0))):
+				return
 
 
 func _weak_lane() -> int:
